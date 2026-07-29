@@ -1,4 +1,4 @@
-# Apple Music-Style Automix Requirements
+# OpenMix Requirements
 # Advanced audio processing for professional DJ-quality mixing
 
 # Core Audio Processing

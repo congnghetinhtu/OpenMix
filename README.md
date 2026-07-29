@@ -1,6 +1,6 @@
-# Apple Music-Style Automix Script
+# OpenMix
 
-Create seamless DJ-style mixes from a folder of audio tracks, mimicking Apple Music's Automix feature with intelligent transitions, tempo matching, and crossfading.
+Create seamless DJ-style mixes from a folder of audio tracks with intelligent transitions, tempo matching, and crossfading.
 
 ## Features
 
@@ -42,12 +42,12 @@ Create seamless DJ-style mixes from a folder of audio tracks, mimicking Apple Mu
 
 ### Basic Usage
 ```bash
-python automix.py /path/to/your/music/folder
+python openmix.py /path/to/your/music/folder
 ```
 
 ### Advanced Options
 ```bash
-python automix.py /path/to/music -o "my_mix.wav" -c 6.0 -s 48000
+python openmix.py /path/to/music -o "my_mix.wav" -c 6.0 -s 48000
 ```
 
 ### Command Line Arguments
@@ -55,7 +55,7 @@ python automix.py /path/to/music -o "my_mix.wav" -c 6.0 -s 48000
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `input_folder` | Path to folder containing audio tracks | Required |
-| `-o, --output` | Output filename | `automix_output.wav` |
+| `-o, --output` | Output filename | `openmix_output.wav` |
 | `-c, --crossfade` | Crossfade duration in seconds | `8.0` |
 | `-s, --sample-rate` | Sample rate for processing | `44100` |
 
@@ -63,17 +63,17 @@ python automix.py /path/to/music -o "my_mix.wav" -c 6.0 -s 48000
 
 ### Create a mix with default settings:
 ```bash
-python automix.py ~/Music/MyPlaylist
+python openmix.py ~/Music/MyPlaylist
 ```
 
 ### Create a mix with custom crossfade and output name:
 ```bash
-python automix.py ~/Music/PartyMix -o "party_night_mix.wav" -c 10.0
+python openmix.py ~/Music/PartyMix -o "party_night_mix.wav" -c 10.0
 ```
 
 ### High-quality mix with longer crossfades:
 ```bash
-python automix.py ~/Music/ChillOut -o "chill_mix.wav" -c 12.0 -s 48000
+python openmix.py ~/Music/ChillOut -o "chill_mix.wav" -c 12.0 -s 48000
 ```
 
 ## How It Works
