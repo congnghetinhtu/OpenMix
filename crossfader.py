@@ -50,6 +50,10 @@ class Crossfader:
         track1_end = track1_audio[-crossfade_samples:].copy()
         track2_start = track2_audio[:crossfade_samples].copy()
 
+        # 5s lead-in before the crossfade so the low-pass ramps in early
+        lead_samples = int(self.sr * 5.0)
+        lead = track1_audio[-crossfade_samples - lead_samples:-crossfade_samples].copy()
+
         # Tempo sync (may change segment lengths)
         tempo_diff = abs(track1_tempo - track2_tempo) if track1_tempo and track2_tempo else 0
         if track1_tempo and track2_tempo and tempo_diff > 1.5:
@@ -90,8 +94,15 @@ class Crossfader:
             track1_end = self._apply_key_correction(track1_end, track1_key, track2_key, is_outro=True)
             track2_start = self._apply_key_correction(track2_start, track2_key, track1_key, is_outro=False)
 
-        # Low-pass filter the OUTGOING track to mask the transition
-        track1_end = self._apply_transition_filter(track1_end, crossfade_samples)
+        # Low-pass filter the OUTGOING track to mask the transition, starting 5s before
+        filter_input = np.concatenate([lead.astype(track1_end.dtype), track1_end]) if len(lead) else track1_end
+        filtered = self._apply_transition_filter(filter_input, crossfade_samples, center_offset=len(lead))
+        if len(lead):
+            lead_filtered = filtered[:len(lead)]
+            track1_end = filtered[len(lead):]
+        else:
+            lead_filtered = None
+            track1_end = filtered
 
         # Crossfade curves (match actual segment length)
         fade_out, fade_in = make_equal_power_crossfade(crossfade_samples)
@@ -106,18 +117,29 @@ class Crossfader:
         # Blend boundary: overlap unmodified tail into modified crossfade start (prevents click)
         blend = 256
         if len(track1_audio) > crossfade_samples + blend:
-            tail = track1_audio[-(crossfade_samples + blend):-crossfade_samples].copy()
+            if lead_filtered is not None and len(lead_filtered) >= blend:
+                tail = lead_filtered[-blend:].copy()
+            else:
+                tail = track1_audio[-(crossfade_samples + blend):-crossfade_samples].copy()
             head = crossfade_section[:blend].copy()
             fade = np.linspace(0, 1, blend)
             if tail.ndim > 1:
                 fade = fade[:, None]
             crossfade_section[:blend] = tail * (1 - fade) + head * fade
 
-        result = np.concatenate([
-            track1_audio[:-crossfade_samples],
-            crossfade_section,
-            track2_audio[crossfade_samples:],
-        ])
+        if lead_filtered is not None:
+            result = np.concatenate([
+                track1_audio[:-(crossfade_samples + len(lead_filtered))],
+                lead_filtered,
+                crossfade_section,
+                track2_audio[crossfade_samples:],
+            ])
+        else:
+            result = np.concatenate([
+                track1_audio[:-crossfade_samples],
+                crossfade_section,
+                track2_audio[crossfade_samples:],
+            ])
         return result
 
     # -- internal helpers --
@@ -179,28 +201,41 @@ class Crossfader:
             return audio
 
     def _apply_transition_filter(
-        self, audio: np.ndarray, crossfade_samples: int
+        self, audio: np.ndarray, crossfade_samples: int, center_offset: int = 0
     ) -> np.ndarray:
         """Smooth low-pass filter during crossfade center.
         RMS-normalized per segment to prevent volume loss.
+        With center_offset (lead-in samples), the low-pass ramps in
+        starting center_offset samples before the transition point.
         """
         n = len(audio)
         nyquist = self.sr / 2
         min_freq = 3500.0
-        center = n // 2
-        active_half = n // 3
+        if center_offset > 0:
+            center = center_offset
+            active_half = center_offset
+            one_sided = True
+        else:
+            center = n // 2
+            active_half = n // 3
+            one_sided = False
 
         result = audio.astype(np.float64).copy()
         seg_len = 8192
         hop = seg_len // 2
         order = 2
 
-        for start in range(max(0, center - active_half - seg_len), min(n - seg_len, center + active_half), hop):
+        right_bound = n if one_sided else center + active_half
+
+        for start in range(max(0, center - active_half - seg_len), min(n - seg_len, right_bound), hop):
             end = start + seg_len
             mid = start + seg_len // 2
 
-            dist = abs(mid - center) / active_half
-            dist = min(dist, 1.0)
+            if one_sided:
+                dist = np.clip((center - mid) / active_half, 0.0, 1.0)
+            else:
+                dist = abs(mid - center) / active_half
+                dist = min(dist, 1.0)
             cutoff = min_freq + (nyquist - min_freq) * dist
             cutoff = np.clip(cutoff, 200.0, nyquist - 100.0)
 
