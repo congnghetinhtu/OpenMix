@@ -48,7 +48,6 @@ def normalize_tracks(tracks: List[TrackAnalysis], target_rms: float = 0.15):
 def run(
     input_folder: str,
     output_file: str = "openmix_output.wav",
-    crossfade_duration: float = 15.0,
     sample_rate: int = 44100,
 ) -> bool:
     folder = Path(input_folder)
@@ -56,7 +55,8 @@ def run(
         logger.error(f"Input folder does not exist: {input_folder}")
         return False
 
-    config = AudioConfig(sample_rate=sample_rate, crossfade_duration=crossfade_duration)
+    config = AudioConfig(sample_rate=sample_rate)
+    crossfade_duration = 15.0
 
     # Discover files
     audio_files = get_audio_files(folder, config.supported_formats)
@@ -248,11 +248,10 @@ def main():
     parser = argparse.ArgumentParser(description="OpenMix — seamless DJ-style mix")
     parser.add_argument("input_folder", help="Folder containing audio tracks")
     parser.add_argument("-o", "--output", default="openmix_output.wav")
-    parser.add_argument("-c", "--crossfade", type=float, default=15.0)
     parser.add_argument("-s", "--sample-rate", type=int, default=44100)
     args = parser.parse_args()
 
-    success = run(args.input_folder, args.output, args.crossfade, args.sample_rate)
+    success = run(args.input_folder, args.output, sample_rate=args.sample_rate)
     sys.exit(0 if success else 1)
 
 

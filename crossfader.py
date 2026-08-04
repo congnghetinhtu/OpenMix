@@ -101,11 +101,6 @@ class Crossfader:
             track1_end, track2_start, fade_out, fade_in, debug_log
         )
 
-        # Overlap compensation: -3dB during overlap to counter equal-power summation
-        overlap_mask = (fade_out > 0.01) & (fade_in > 0.01)
-        if np.any(overlap_mask):
-            crossfade_section[overlap_mask] *= (1.0 / np.sqrt(2))
-
         debug_log.crossfade_section = crossfade_section
 
         # Blend boundary: overlap unmodified tail into modified crossfade start (prevents click)

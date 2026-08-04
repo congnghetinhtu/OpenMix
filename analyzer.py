@@ -38,9 +38,9 @@ def analyze_track(file_path: Path, config: AudioConfig) -> Optional[TrackAnalysi
             beats = np.array([])
             beat_frames = np.array([])
         else:
-            tempo, beats = librosa.beat.beat_track(y=focus, sr=sr, units='time')
+            tempo, beat_frames = librosa.beat.beat_track(y=focus, sr=sr, units='frames')
             tempo = float(np.asarray(tempo).reshape(-1)[0])
-            beat_frames = librosa.beat.beat_track(y=focus, sr=sr, units='frames')[1]
+            beats = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
 
         n_fft = max(2, min(2048, len(focus)))
         hop_length = max(1, min(512, max(1, n_fft // 4)))
