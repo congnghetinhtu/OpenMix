@@ -98,11 +98,26 @@ def find_vocal_transition_points(
 ) -> float:
     """Find optimal intro_skip for vocal-to-vocal flow. Returns seconds to skip from track2 start."""
 
-    def snap(t: float, beats: Optional[np.ndarray]) -> float:
+    def snap(t: float, beats: Optional[np.ndarray], vocal_segments: Optional[List[Tuple[float, float]]] = None) -> float:
         if beats is None or len(beats) == 0:
             return t
         idx = np.argmin(np.abs(beats - t))
-        return beats[idx] if abs(beats[idx] - t) < 2.0 else t
+        candidate = beats[idx]
+        if abs(candidate - t) >= 2.0:
+            return t
+        # Avoid snapping into a vocal segment
+        if vocal_segments and is_in_vocals(candidate, vocal_segments):
+            candidates = []
+            for offset in [-1, 1, -2, 2]:
+                alt_idx = idx + offset
+                if 0 <= alt_idx < len(beats):
+                    if not is_in_vocals(beats[alt_idx], vocal_segments):
+                        candidates.append(beats[alt_idx])
+            if candidates:
+                valid = [c for c in candidates if abs(c - t) < 2.0]
+                if valid:
+                    return min(valid, key=lambda x: abs(x - t))
+        return candidate
 
     if not vocal1 or not vocal2:
         return 0.0
@@ -122,11 +137,11 @@ def find_vocal_transition_points(
 
     if not outro_vocals and intro_vocals:
         first = min(intro_vocals, key=lambda x: x[0])
-        return snap(max(0, first[0] - 2.0), beats2)
+        return snap(max(0, first[0] - 2.0), beats2, intro_vocals)
 
     # Both have vocals — skip past the first intro vocal segment in track2
     first = min(intro_vocals, key=lambda x: x[0])
-    return snap(max(0, first[0] - 1.0), beats2)
+    return snap(max(0, first[0] - 1.0), beats2, intro_vocals)
 
 
 def ensure_smooth_flow(
@@ -191,6 +206,7 @@ def align_beats(
         strong1 = beats1[::4] if len(beats1) >= 4 else beats1
         strong2 = beats2[::4] if len(beats2) >= 4 else beats2
 
+        # Determine target phase for track2 alignment
         if not skip_track1:
             beat1_idx = np.argmin(np.abs(strong1 - transition_point))
             beat1_time = strong1[beat1_idx]
@@ -207,14 +223,30 @@ def align_beats(
                 else:
                     logger.warning(f"    Track1 beat alignment would leave < crossfade samples, skipping truncation")
 
-        # Adjust beat2 times by audio2_offset so they reference the trimmed audio
-        beat2_time = (strong2[0] - audio2_offset) if len(strong2) > 0 else 0
-        if beat2_time > 0 and is_in_vocals(beat2_time, track2.vocal_segments):
-            beat2_time = nearest_vocal_boundary(beat2_time, track2.vocal_segments)
-            logger.info(f"    Adjusted track2 to vocal boundary: {beat2_time:.2f}s")
-        beat2_samples = int(beat2_time * sr)
-        if 0 < beat2_samples < len(audio2):
-            audio2 = audio2[beat2_samples:]
+        # Phase-align track2: shift so its nearest strong beat matches the transition point
+        # strong2 times are in original track2 timeline; audio2 was already trimmed by audio2_offset
+        target_phase = transition_point  # where track2 should start
+        beat2_candidates_orig = strong2  # in original timeline
+        if len(beat2_candidates_orig) > 0:
+            # Convert candidates to trimmed-audio timeline
+            beat2_trimmed = beat2_candidates_orig - audio2_offset
+            # Find best beat to align to target_phase
+            best_idx = np.argmin(np.abs(beat2_trimmed - target_phase))
+            beat2_shift = beat2_trimmed[best_idx]
+
+            # Offset vocal segments to trimmed-audio timeline for boundary check
+            adjusted_vocals = [
+                (s - audio2_offset, e - audio2_offset)
+                for s, e in track2.vocal_segments
+                if e > audio2_offset and s < audio2_offset + len(audio2) / sr
+            ]
+
+            if beat2_shift > 0 and is_in_vocals(beat2_shift, adjusted_vocals):
+                beat2_shift = nearest_vocal_boundary(beat2_shift, adjusted_vocals)
+                logger.info(f"    Adjusted track2 to vocal boundary: {beat2_shift:.2f}s")
+            beat2_samples = int(beat2_shift * sr)
+            if 0 < beat2_samples < len(audio2):
+                audio2 = audio2[beat2_samples:]
 
     return audio1, audio2
 

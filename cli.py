@@ -179,12 +179,11 @@ def run(
             mix_position_sec=round(mix_position, 1),
         ))
 
-    # Final normalization
+    # Final normalization — RMS-based gain for consistent loudness
     logger.info("Applying final volume normalization...")
     final_rms = np.sqrt(np.mean(mixed**2))
     if final_rms > 0:
-        gain = np.clip(0.15 / final_rms, 0.8, 1.2)
-        mixed = mixed * gain
+        mixed = mixed * (0.15 / final_rms)
 
     mixed = soft_limit(mixed, 0.95)
 

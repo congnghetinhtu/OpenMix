@@ -50,7 +50,7 @@ class Crossfader:
         track1_end = track1_audio[-crossfade_samples:].copy()
         track2_start = track2_audio[:crossfade_samples].copy()
 
-        # Tempo sync
+        # Tempo sync (may change segment lengths)
         tempo_diff = abs(track1_tempo - track2_tempo) if track1_tempo and track2_tempo else 0
         if track1_tempo and track2_tempo and tempo_diff > 1.5:
             if tempo_diff < 4:
@@ -73,7 +73,15 @@ class Crossfader:
             debug_log.tempo_sync_mode = 'none'
             logger.info(f"  Tempo difference minimal ({tempo_diff:.1f} BPM), preserving natural flow")
 
-        # Key correction
+        # After tempo sync, segments may differ in length — trim to minimum
+        actual_cf = min(len(track1_end), len(track2_start))
+        if actual_cf < crossfade_samples:
+            logger.info(f"    Tempo sync shortened segments: {crossfade_samples} -> {actual_cf} samples")
+            track1_end = track1_end[:actual_cf]
+            track2_start = track2_start[:actual_cf]
+            crossfade_samples = actual_cf
+
+        # Key correction — crossfade window only (full track stays unshifted)
         if track1_key is not None and track2_key is not None:
             key_diff = (track2_key - track1_key) % 12
             if key_diff > 6:
@@ -82,13 +90,21 @@ class Crossfader:
             track1_end = self._apply_key_correction(track1_end, track1_key, track2_key, is_outro=True)
             track2_start = self._apply_key_correction(track2_start, track2_key, track1_key, is_outro=False)
 
-        # Crossfade curves
+        # Low-pass filter the OUTGOING track to mask the transition
+        track1_end = self._apply_transition_filter(track1_end, crossfade_samples)
+
+        # Crossfade curves (match actual segment length)
         fade_out, fade_in = make_equal_power_crossfade(crossfade_samples)
 
         # Vocal-aware blending
         crossfade_section = self._vocal_aware_crossfade(
             track1_end, track2_start, fade_out, fade_in, debug_log
         )
+
+        # Overlap compensation: -3dB during overlap to counter equal-power summation
+        overlap_mask = (fade_out > 0.01) & (fade_in > 0.01)
+        if np.any(overlap_mask):
+            crossfade_section[overlap_mask] *= (1.0 / np.sqrt(2))
 
         debug_log.crossfade_section = crossfade_section
 
@@ -133,8 +149,6 @@ class Crossfader:
 
         try:
             result = time_stretch(audio, rate=factor)
-            if len(result) != len(audio):
-                result = signal.resample(result, len(audio))
             logger.info(f"    Applied invisible tempo sync: {factor:.4f}x stretch")
             return result
 
@@ -163,13 +177,60 @@ class Crossfader:
 
         try:
             shifted = librosa.effects.pitch_shift(audio, sr=self.sr, n_steps=shift)
-            if len(shifted) != len(audio):
-                shifted = signal.resample(shifted, len(audio))
             logger.info(f"    Applied key correction: shift {shift:.2f} semitones")
             return shifted
         except Exception as e:
             logger.warning(f"    Key correction failed: {e}, using original")
             return audio
+
+    def _apply_transition_filter(
+        self, audio: np.ndarray, crossfade_samples: int
+    ) -> np.ndarray:
+        """Smooth low-pass filter during crossfade center.
+        RMS-normalized per segment to prevent volume loss.
+        """
+        n = len(audio)
+        nyquist = self.sr / 2
+        min_freq = 3500.0
+        center = n // 2
+        active_half = n // 3
+
+        result = audio.astype(np.float64).copy()
+        seg_len = 8192
+        hop = seg_len // 2
+        order = 2
+
+        for start in range(max(0, center - active_half - seg_len), min(n - seg_len, center + active_half), hop):
+            end = start + seg_len
+            mid = start + seg_len // 2
+
+            dist = abs(mid - center) / active_half
+            dist = min(dist, 1.0)
+            cutoff = min_freq + (nyquist - min_freq) * dist
+            cutoff = np.clip(cutoff, 200.0, nyquist - 100.0)
+
+            wn = cutoff / nyquist
+            sos = signal.butter(order, wn, btype='low', output='sos')
+
+            if audio.ndim == 1:
+                segment = audio[start:end].astype(np.float64)
+                rms_orig = np.sqrt(np.mean(segment**2)) + 1e-10
+                filtered = signal.sosfiltfilt(sos, segment)
+                rms_filt = np.sqrt(np.mean(filtered**2)) + 1e-10
+                filtered = filtered * (rms_orig / rms_filt)
+                fade = np.hanning(end - start)
+                result[start:end] = result[start:end] * (1 - fade) + filtered * fade
+            else:
+                for ch in range(audio.shape[1]):
+                    segment = audio[start:end, ch].astype(np.float64)
+                    rms_orig = np.sqrt(np.mean(segment**2)) + 1e-10
+                    filtered = signal.sosfiltfilt(sos, segment)
+                    rms_filt = np.sqrt(np.mean(filtered**2)) + 1e-10
+                    filtered = filtered * (rms_orig / rms_filt)
+                    fade = np.hanning(end - start)
+                    result[start:end, ch] = result[start:end, ch] * (1 - fade) + filtered * fade
+
+        return result.astype(audio.dtype)
 
     def _vocal_aware_crossfade(
         self,

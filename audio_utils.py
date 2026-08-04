@@ -62,12 +62,10 @@ def time_stretch(audio: np.ndarray, rate: float) -> np.ndarray:
         return audio
 
     if audio.ndim == 1:
-        stretched = librosa.effects.time_stretch(audio, rate=rate)
-        if len(stretched) != len(audio):
-            stretched = signal.resample(stretched, len(audio))
-        return stretched
+        return librosa.effects.time_stretch(audio, rate=rate)
 
-    # Multichannel: stretch channel 0 to determine output length
+    # Multichannel: stretch channel 0 to determine target length,
+    # then resample all channels to that length (avoids L/R phase drift).
     ref = librosa.effects.time_stretch(audio[:, 0], rate=rate)
     new_length = len(ref)
     channels = [ref]
