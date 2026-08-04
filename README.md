@@ -249,7 +249,7 @@ Covers data-model construction, crossfade curve endpoints, soft limiting, and au
 ## 🧪 Verify with a real mix
 
 ```bash
-python openmix.py tracks/
+python openmix.py folderToTracks/
 ```
 
 The repo ships a sample `tracks/` folder — inspect the generated `transitions/*.wav` clips and the CSV log to see the algorithm's decisions.
