@@ -27,7 +27,6 @@ Intelligent transitions · Tempo matching · Vocal-aware crossfading · Harmonic
 
 - **Equal-power crossfading** with quintic smoothstep curves
 - **Tempo synchronization** — invisible / increasing / decreasing modes
-- **Key correction** — pitch shift inside the crossfade window only
 - **Vocal-aware ducking** — symmetric ducking prevents muddy overlap
 - **Low-pass masking** — outgoing track fades into the blend
 - **Beat alignment** — snapped to strong beats, avoiding vocal cut-through
@@ -144,7 +143,6 @@ For each adjacent pair, `cli.py` orchestrates `mixer.py` + `crossfader.py`:
 2. **Beat alignment** — snaps the transition point to strong beats on both sides
 3. **Crossfade**:
    - **Tempo sync** — BPMs differ > 1.5 → time-stretch both sides (large diffs meet at midpoint)
-   - **Key correction** — dissonant key distances → pitch shift ±2 semitones (window only)
    - **Low-pass masking** — progressive filtering, RMS-matched per segment
    - **Vocal ducking** — simultaneous energy → symmetric smoothed ducking
    - **Click prevention** — 256-sample boundary blend

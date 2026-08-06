@@ -11,12 +11,21 @@ import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter1d
 
-from models import CrossfadeDebug
 from audio_utils import (
     apply_fade,
-    time_stretch,
     make_equal_power_crossfade,
+    time_stretch,
 )
+from constants import (
+    BLEND_SAMPLES,
+    FILTER_MIN_HZ,
+    LOWPASS_START_HZ,
+    SOFT_LIMIT_CEILING,
+    TEMPO_MAX_STRETCH_INVISIBLE,
+    TEMPO_MAX_STRETCH_LARGE,
+    TEMPO_MAX_STRETCH_SMALL,
+)
+from models import CrossfadeDebug
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +35,6 @@ class Crossfader:
         self.sr = sample_rate
         self.crossfade_duration = crossfade_duration
         self.max_tempo_samples = int(sample_rate * crossfade_duration * 0.9)
-        self.max_key_samples = int(sample_rate * crossfade_duration * 0.9)
 
     def create(
         self,
@@ -35,8 +43,6 @@ class Crossfader:
         crossfade_samples: int,
         track1_tempo: Optional[float] = None,
         track2_tempo: Optional[float] = None,
-        track1_key: Optional[int] = None,
-        track2_key: Optional[int] = None,
         debug_log: Optional[CrossfadeDebug] = None,
     ) -> np.ndarray:
         if debug_log is None:
@@ -46,6 +52,10 @@ class Crossfader:
         crossfade_samples = min(crossfade_samples, len(track1_audio), len(track2_audio))
         if crossfade_samples < requested_cf:
             logger.warning(f"Crossfade shortened: {requested_cf} -> {crossfade_samples} samples (track too short)")
+
+        # Original transition window length — tempo sync below may change segment lengths,
+        # but the prefix cutoff must stay anchored to the original track1 timeline.
+        window_samples = crossfade_samples
 
         track1_end = track1_audio[-crossfade_samples:].copy()
         track2_start = track2_audio[:crossfade_samples].copy()
@@ -85,15 +95,6 @@ class Crossfader:
             track2_start = track2_start[:actual_cf]
             crossfade_samples = actual_cf
 
-        # Key correction — crossfade window only (full track stays unshifted)
-        if track1_key is not None and track2_key is not None:
-            key_diff = (track2_key - track1_key) % 12
-            if key_diff > 6:
-                key_diff -= 12
-            debug_log.key_correction = abs(key_diff) > 1 and abs(key_diff) not in (5, 7)
-            track1_end = self._apply_key_correction(track1_end, track1_key, track2_key, is_outro=True)
-            track2_start = self._apply_key_correction(track2_start, track2_key, track1_key, is_outro=False)
-
         # Low-pass filter the OUTGOING track to mask the transition, starting 5s before
         filter_input = np.concatenate([lead.astype(track1_end.dtype), track1_end]) if len(lead) else track1_end
         filtered = self._apply_transition_filter(filter_input, crossfade_samples, center_offset=len(lead))
@@ -115,8 +116,8 @@ class Crossfader:
         debug_log.crossfade_section = crossfade_section
 
         # Blend boundary: overlap unmodified tail into modified crossfade start (prevents click)
-        blend = 256
-        if len(track1_audio) > crossfade_samples + blend:
+        blend = BLEND_SAMPLES
+        if len(track1_audio) > window_samples + blend:
             if lead_filtered is not None and len(lead_filtered) >= blend:
                 tail = lead_filtered[-blend:].copy()
             else:
@@ -129,7 +130,7 @@ class Crossfader:
 
         if lead_filtered is not None:
             result = np.concatenate([
-                track1_audio[:-(crossfade_samples + len(lead_filtered))],
+                track1_audio[:-(window_samples + len(lead_filtered))],
                 lead_filtered,
                 crossfade_section,
                 track2_audio[crossfade_samples:],
@@ -155,7 +156,13 @@ class Crossfader:
             logger.info("    Skipping heavy tempo sync for long section")
             return audio
 
-        max_change = min(0.02, tempo_diff / original_tempo * 0.15)
+        if tempo_diff < 4:
+            max_stretch = TEMPO_MAX_STRETCH_INVISIBLE
+        elif tempo_diff < 10:
+            max_stretch = TEMPO_MAX_STRETCH_SMALL
+        else:
+            max_stretch = TEMPO_MAX_STRETCH_LARGE
+        max_change = min(max_stretch, tempo_diff / original_tempo * 0.15)
         if is_outro:
             factor = 1.0 + max_change * 0.5 if target_tempo > original_tempo else 1.0 - max_change * 0.5
         else:
@@ -173,33 +180,6 @@ class Crossfader:
             logger.warning(f"    Invisible tempo sync failed: {e}, using original")
             return audio
 
-    def _apply_key_correction(
-        self, audio: np.ndarray, source_key: int, target_key: int, is_outro: bool
-    ) -> np.ndarray:
-        key_diff = (target_key - source_key) % 12
-        if key_diff > 6:
-            key_diff -= 12
-
-        if abs(key_diff) <= 1 or abs(key_diff) in (5, 7):
-            return audio
-
-        if len(audio) > self.max_key_samples:
-            return audio
-
-        shift = key_diff * 0.25
-        shift = np.clip(shift, -2, 2)
-
-        if abs(shift) <= 0.1:
-            return audio
-
-        try:
-            shifted = librosa.effects.pitch_shift(audio, sr=self.sr, n_steps=shift)
-            logger.info(f"    Applied key correction: shift {shift:.2f} semitones")
-            return shifted
-        except Exception as e:
-            logger.warning(f"    Key correction failed: {e}, using original")
-            return audio
-
     def _apply_transition_filter(
         self, audio: np.ndarray, crossfade_samples: int, center_offset: int = 0
     ) -> np.ndarray:
@@ -210,7 +190,7 @@ class Crossfader:
         """
         n = len(audio)
         nyquist = self.sr / 2
-        min_freq = 3500.0
+        min_freq = LOWPASS_START_HZ
         if center_offset > 0:
             center = center_offset
             active_half = center_offset
@@ -237,7 +217,7 @@ class Crossfader:
                 dist = abs(mid - center) / active_half
                 dist = min(dist, 1.0)
             cutoff = min_freq + (nyquist - min_freq) * dist
-            cutoff = np.clip(cutoff, 200.0, nyquist - 100.0)
+            cutoff = np.clip(cutoff, FILTER_MIN_HZ, nyquist - 100.0)
 
             wn = cutoff / nyquist
             sos = signal.butter(order, wn, btype='low', output='sos')
@@ -299,14 +279,18 @@ class Crossfader:
                     duck_curve = gaussian_filter1d(duck_curve, sigma=50)
                     duck_curve = np.clip(duck_curve, 0.5, 1.0)
 
-            # Apply symmetric ducking to both tracks (prevents muddy buildup)
-            apply_duck = lambda audio, curve: audio * curve[:, None] if audio.ndim > 1 else audio * curve
-            track1_ducked = apply_duck(track1_end, duck_curve)
-            track2_start = apply_duck(track2_start, duck_curve)
+                # Apply symmetric ducking to both tracks (prevents muddy buildup)
+                apply_duck = lambda audio, curve: audio * curve[:, None] if audio.ndim > 1 else audio * curve
+                track1_ducked = apply_duck(track1_end, duck_curve)
+                track2_start = apply_duck(track2_start, duck_curve)
 
-            debug_log.ducking_applied = True
-            debug_log.ducking_frames = int(np.sum(duck_mask))
-            logger.info(f"    Vocal overlap prevention: ducked {np.sum(duck_mask)} frames")
+                debug_log.ducking_applied = True
+                debug_log.ducking_frames = int(np.sum(duck_mask))
+                logger.info(f"    Vocal overlap prevention: ducked {np.sum(duck_mask)} frames")
+            else:
+                debug_log.ducking_applied = False
+                debug_log.ducking_frames = 0
+                track1_ducked = track1_end
 
         except Exception as e:
             debug_log.ducking_applied = False
@@ -317,7 +301,7 @@ class Crossfader:
         crossfaded = apply_fade(track1_ducked, fade_out) + apply_fade(track2_start, fade_in)
 
         peak = np.max(np.abs(crossfaded))
-        if peak > 0.95:
-            crossfaded = crossfaded * (0.95 / peak)
+        if peak > SOFT_LIMIT_CEILING:
+            crossfaded = crossfaded * (SOFT_LIMIT_CEILING / peak)
 
         return crossfaded

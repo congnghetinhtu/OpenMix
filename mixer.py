@@ -5,12 +5,14 @@ OpenMix mix assembly: compatibility scoring, track ordering, beat alignment, smo
 import csv
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
+import librosa
 import numpy as np
 
-from models import AudioConfig, TrackAnalysis, TransitionLog
-from audio_utils import soft_limit
+from analyzer import detect_beats_tail
+from constants import MIN_BEATS_FOR_STRONG, PHASE_ALIGN_MAX_FRAC
+from models import TrackAnalysis, TransitionLog
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,6 @@ def find_vocal_transition_points(
     vocal2: List[Tuple[float, float]],
     dur1: float,
     dur2: float,
-    crossfade_duration: float,
     beats1: Optional[np.ndarray] = None,
     beats2: Optional[np.ndarray] = None,
     outro_start1: Optional[float] = None,
@@ -147,7 +148,6 @@ def find_vocal_transition_points(
 def ensure_smooth_flow(
     track1: TrackAnalysis,
     track2: TrackAnalysis,
-    crossfade_duration: float,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """Return (full_audio1, vocal_aligned_audio2, intro_skip_sec) for smooth vocal-to-vocal flow."""
     intro_skip = find_vocal_transition_points(
@@ -155,7 +155,6 @@ def ensure_smooth_flow(
         track2.vocal_segments,
         track1.duration,
         track2.duration,
-        crossfade_duration,
         track1.beats,
         track2.beats,
         track1.outro_start,
@@ -203,8 +202,8 @@ def align_beats(
     transition_point = (len(audio1) / sr) - crossfade_time
 
     if len(beats1) > 0 and len(beats2) > 0:
-        strong1 = beats1[::4] if len(beats1) >= 4 else beats1
-        strong2 = beats2[::4] if len(beats2) >= 4 else beats2
+        strong1 = beats1[::STRIDE_STRONG_BEATS] if len(beats1) >= MIN_BEATS_FOR_STRONG else beats1
+        strong2 = beats2[::STRIDE_STRONG_BEATS] if len(beats2) >= MIN_BEATS_FOR_STRONG else beats2
 
         # Determine target phase for track2 alignment
         if not skip_track1:
@@ -221,7 +220,7 @@ def align_beats(
                 if 0 < target <= len(audio1) and target >= crossfade_samples:
                     audio1 = audio1[:target]
                 else:
-                    logger.warning(f"    Track1 beat alignment would leave < crossfade samples, skipping truncation")
+                    logger.warning("    Track1 beat alignment would leave < crossfade samples, skipping truncation")
 
         # Phase-align track2: shift so its nearest strong beat matches the transition point
         # strong2 times are in original track2 timeline; audio2 was already trimmed by audio2_offset
@@ -262,7 +261,7 @@ def write_transition_log(logs: List[TransitionLog], output_path: Path):
     fieldnames = [
         'transition', 'from_track', 'to_track', 'from_tempo', 'to_tempo',
         'tempo_diff', 'tempo_sync_mode', 'from_key', 'to_key', 'key_diff',
-        'key_correction_applied', 'compatibility_score', 'crossfade_sec',
+        'compatibility_score', 'crossfade_sec',
         'vocal_segments_outgoing', 'vocal_segments_incoming',
         'ducking_applied', 'ducking_frames', 'mix_position_sec',
     ]

@@ -3,9 +3,11 @@ OpenMix low-level audio processing utilities.
 Pure functions — no class state. Maps to Swift enum AudioHelpers.
 """
 
-import numpy as np
 import librosa
+import numpy as np
 from scipy import signal
+
+from constants import NORMALIZE_GAIN_MAX, NORMALIZE_GAIN_MIN, SOFT_LIMIT_CEILING
 
 
 def normalize_audio(audio: np.ndarray, target_lufs: float = -20.0) -> np.ndarray:
@@ -19,7 +21,7 @@ def normalize_audio(audio: np.ndarray, target_lufs: float = -20.0) -> np.ndarray
     target_rms = 10 ** (target_lufs / 20)
     gain = target_rms / rms
     gain = min(gain, 0.9 / peak)
-    gain = np.clip(gain, 0.3, 2.0)
+    gain = np.clip(gain, NORMALIZE_GAIN_MIN, NORMALIZE_GAIN_MAX)
 
     normalized = audio * gain
 
@@ -90,7 +92,7 @@ def make_equal_power_crossfade(n: int):
     return fade_out, fade_in
 
 
-def soft_limit(audio: np.ndarray, ceiling: float = 0.95) -> np.ndarray:
+def soft_limit(audio: np.ndarray, ceiling: float = SOFT_LIMIT_CEILING) -> np.ndarray:
     """Apply gentle peak limiting."""
     peak = np.max(np.abs(audio))
     if peak > ceiling:

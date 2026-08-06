@@ -3,9 +3,10 @@ OpenMix data models.
 Maps directly to Swift structs when porting.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
+
 import numpy as np
 
 
@@ -56,7 +57,6 @@ class TransitionLog:
     from_key: int
     to_key: int
     key_diff: int
-    key_correction_applied: bool
     compatibility_score: float
     crossfade_sec: float
     vocal_segments_outgoing: int
@@ -77,7 +77,6 @@ class TransitionLog:
             'from_key': self.from_key,
             'to_key': self.to_key,
             'key_diff': self.key_diff,
-            'key_correction_applied': self.key_correction_applied,
             'compatibility_score': self.compatibility_score,
             'crossfade_sec': self.crossfade_sec,
             'vocal_segments_outgoing': self.vocal_segments_outgoing,
@@ -91,7 +90,6 @@ class TransitionLog:
 @dataclass
 class CrossfadeDebug:
     tempo_sync_mode: str = 'none'
-    key_correction: bool = False
     ducking_applied: bool = False
     ducking_frames: int = 0
     crossfade_section: Optional[np.ndarray] = None

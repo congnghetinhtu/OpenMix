@@ -13,11 +13,6 @@ For the new modular API:
     run("/path/to/music")
 """
 
-import sys
-
-# Re-export the OpenMixer class for backward compatibility
-# New code should use: from cli import run
-
 
 class OpenMixer:
     """Legacy wrapper — delegates to cli.run()."""
@@ -43,4 +38,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

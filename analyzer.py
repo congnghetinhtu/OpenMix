@@ -5,14 +5,14 @@ Pure analysis logic — no mixing/crossfade state.
 
 import logging
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 import librosa
 import numpy as np
 from scipy import signal
 
+from audio_utils import analysis_mono, normalize_audio
 from models import AudioConfig, TrackAnalysis
-from audio_utils import normalize_audio, analysis_mono
 
 logger = logging.getLogger(__name__)
 
@@ -143,9 +143,8 @@ def detect_vocals(y: np.ndarray, sr: int) -> List[Tuple[float, float]]:
         return segments
 
     except Exception as e:
-        logger.warning(f"    Vocal detection failed: {e}, using fallback")
-        duration = len(y) / sr
-        return [(duration * 0.2, duration * 0.4), (duration * 0.6, duration * 0.8)]
+        logger.warning(f"    Vocal detection failed: {e}, treating as no vocals")
+        return []
 
 
 def detect_vocals_edges(y: np.ndarray, sr: int, config: AudioConfig) -> List[Tuple[float, float]]:

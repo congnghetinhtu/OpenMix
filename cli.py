@@ -10,21 +10,27 @@ import sys
 from pathlib import Path
 from typing import List
 
-import librosa
 import numpy as np
 import soundfile as sf
 
-from models import AudioConfig, TrackAnalysis, TransitionLog, CrossfadeDebug
 from analyzer import analyze_track
 from audio_utils import soft_limit
+from constants import (
+    FINAL_GAIN_MAX,
+    FINAL_GAIN_MIN,
+    NORMALIZE_GAIN_MAX,
+    NORMALIZE_GAIN_MIN,
+    NORMALIZE_TARGET_RMS,
+)
 from crossfader import Crossfader
 from mixer import (
-    calculate_compatibility,
-    smart_track_ordering,
-    ensure_smooth_flow,
     align_beats,
+    calculate_compatibility,
+    ensure_smooth_flow,
+    smart_track_ordering,
     write_transition_log,
 )
+from models import AudioConfig, CrossfadeDebug, TrackAnalysis, TransitionLog
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -37,11 +43,11 @@ def get_audio_files(folder: Path, formats: tuple, exclude: str = "openmix_output
     return files
 
 
-def normalize_tracks(tracks: List[TrackAnalysis], target_rms: float = 0.15):
+def normalize_tracks(tracks: List[TrackAnalysis], target_rms: float = NORMALIZE_TARGET_RMS):
     for t in tracks:
         rms = np.sqrt(np.mean(t.audio_data**2))
         if rms > 0:
-            gain = np.clip(target_rms / rms, 0.3, 3.0)
+            gain = np.clip(target_rms / rms, NORMALIZE_GAIN_MIN, NORMALIZE_GAIN_MAX)
             t.audio_data = t.audio_data * gain
 
 
@@ -128,7 +134,7 @@ def run(
         logger.info(f"  Next tempo: {nxt.tempo:.1f} BPM")
 
         # Smooth flow — use accumulated mixed as the left side
-        _, flow_next, intro_skip = ensure_smooth_flow(current, nxt, crossfade_duration)
+        _, flow_next, intro_skip = ensure_smooth_flow(current, nxt)
         mixed_analysis = _wrap_analysis(current, mixed)
         flow_next_analysis = _wrap_analysis(nxt, flow_next)
 
@@ -143,7 +149,6 @@ def run(
         mixed = crossfader.create(
             aligned_c, aligned_n, crossfade_samples,
             current.tempo, nxt.tempo,
-            current.key, nxt.key,
             debug,
         )
 
@@ -169,7 +174,6 @@ def run(
             from_key=from_key,
             to_key=to_key,
             key_diff=key_diff,
-            key_correction_applied=debug.key_correction,
             compatibility_score=round(compat, 4),
             crossfade_sec=crossfade_duration,
             vocal_segments_outgoing=len(current.vocal_segments),
@@ -183,9 +187,9 @@ def run(
     logger.info("Applying final volume normalization...")
     final_rms = np.sqrt(np.mean(mixed**2))
     if final_rms > 0:
-        mixed = mixed * (0.15 / final_rms)
+        mixed = mixed * np.clip(NORMALIZE_TARGET_RMS / final_rms, FINAL_GAIN_MIN, FINAL_GAIN_MAX)
 
-    mixed = soft_limit(mixed, 0.95)
+    mixed = soft_limit(mixed)
 
     # Save (with TPDF dither to mask 16-bit quantization noise)
     output_path = folder / output_file
@@ -196,7 +200,7 @@ def run(
     write_transition_log(transition_logs, output_path)
 
     total_dur = len(mixed) / sample_rate
-    logger.info(f"Mix created successfully!")
+    logger.info("Mix created successfully!")
     logger.info(f"Output: {output_path}")
     logger.info(f"Duration: {total_dur:.1f} seconds")
     logger.info(f"Tracks mixed: {len(ordered)}")
