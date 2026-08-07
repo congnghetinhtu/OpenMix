@@ -111,21 +111,20 @@ class Crossfader:
             track1_end = filtered
 
         # Phase alignment: zero-crossing boundary + correlation check
+        # Align both tracks to zero crossings at the boundary FIRST
+        track1_end, track2_start, zc_shift = align_to_zero_crossings(track1_end, track2_start)
+        if zc_shift > 0:
+            debug_log.zero_crossing_aligned = True
+            logger.info(f"    Zero-crossing aligned: removed {zc_shift} samples at boundary")
+
+        # Compute phase correlation AFTER ZC alignment (on the actual boundary)
         t1_analysis = track1_end if track1_end.ndim == 1 else np.mean(track1_end, axis=1)
         t2_analysis = track2_start if track2_start.ndim == 1 else np.mean(track2_start, axis=1)
-
-        # Compute phase correlation at boundary
         corr = compute_phase_correlation(
             t1_analysis[-PHASE_CORRELATION_WINDOW:],
             t2_analysis[:PHASE_CORRELATION_WINDOW],
         )
         debug_log.phase_correlation = corr
-
-        # Align both tracks to zero crossings at the boundary
-        track1_end, track2_start, zc_shift = align_to_zero_crossings(track1_end, track2_start)
-        if zc_shift > 0:
-            debug_log.zero_crossing_aligned = True
-            logger.info(f"    Zero-crossing aligned: removed {zc_shift} samples at boundary")
 
         # Invert if strongly out of phase
         if corr < PHASE_INVERT_THRESHOLD:

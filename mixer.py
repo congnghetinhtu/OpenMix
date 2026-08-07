@@ -219,8 +219,10 @@ def align_beats(
             beat_period = 60.0 / track1.tempo if track1.tempo > 0 else 0.5
             if abs(beat1_time - transition_point) < beat_period:
                 if is_in_vocals(beat1_time, track1.vocal_segments):
-                    beat1_time = nearest_vocal_boundary(beat1_time, track1.vocal_segments)
-                    logger.info(f"    Adjusted track1 to vocal boundary: {beat1_time:.2f}s")
+                    adjusted = nearest_vocal_boundary(beat1_time, track1.vocal_segments)
+                    if adjusted < transition_point:
+                        beat1_time = adjusted
+                        logger.info(f"    Adjusted track1 to vocal boundary: {beat1_time:.2f}s")
                 target = int(beat1_time * sr)
                 # Ensure enough samples remain for crossfade
                 if 0 < target <= len(audio1) and target >= crossfade_samples:
@@ -246,7 +248,7 @@ def align_beats(
                 if e > audio2_offset and s < audio2_offset + len(audio2) / sr
             ]
 
-            if beat2_shift > 0 and is_in_vocals(beat2_shift, adjusted_vocals):
+            if beat2_shift >= 0 and is_in_vocals(beat2_shift, adjusted_vocals):
                 beat2_shift = nearest_vocal_boundary(beat2_shift, adjusted_vocals)
                 logger.info(f"    Adjusted track2 to vocal boundary: {beat2_shift:.2f}s")
             beat2_samples = int(beat2_shift * sr)
