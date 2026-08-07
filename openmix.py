@@ -1,35 +1,11 @@
 #!/usr/bin/env python3
 """
-OpenMix — backward-compatible entry point.
-Delegates to modular implementation.
-
+OpenMix — entry point. Delegates to cli module.
 
 Usage:
     python openmix.py /path/to/music
     python openmix.py /path/to/music -o mix.wav
-
-For the new modular API:
-    from cli import run
-    run("/path/to/music")
 """
-
-
-class OpenMixer:
-    """Legacy wrapper — delegates to cli.run()."""
-
-    def __init__(self, input_folder, output_file="openmix_output.wav",
-                 sample_rate=44100):
-        self.input_folder = input_folder
-        self.output_file = output_file
-        self.sample_rate = sample_rate
-
-    def create_mix(self):
-        from cli import run
-        return run(
-            self.input_folder,
-            self.output_file,
-            self.sample_rate,
-        )
 
 
 def main():

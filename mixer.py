@@ -7,11 +7,14 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import librosa
 import numpy as np
 
-from analyzer import detect_beats_tail
-from constants import MIN_BEATS_FOR_STRONG, PHASE_ALIGN_MAX_FRAC
+from constants import (
+    MIN_BEATS_FOR_STRONG,
+    SPECTRAL_CENTROID_RANGE,
+    STRIDE_STRONG_BEATS,
+    TEMPO_RANGE_BPM,
+)
 from models import TrackAnalysis, TransitionLog
 
 logger = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ def calculate_compatibility(t1: TrackAnalysis, t2: TrackAnalysis) -> float:
         if abs(ratio - 2.0) < 0.1 or abs(ratio - 1.5) < 0.1 or abs(ratio - 1.33) < 0.1:
             tempo_score = 0.9
         else:
-            tempo_score = max(0, 1 - abs(tempo1 - tempo2) / 30)
+            tempo_score = max(0, 1 - abs(tempo1 - tempo2) / TEMPO_RANGE_BPM)
 
     key_distance = min(abs(t1.key - t2.key), 12 - abs(t1.key - t2.key))
     if key_distance == 0:
@@ -48,7 +51,7 @@ def calculate_compatibility(t1: TrackAnalysis, t2: TrackAnalysis) -> float:
     energy_score = max(0, 1 - energy_diff / max_energy)
 
     centroid_diff = abs(t1.spectral_centroid - t2.spectral_centroid)
-    spectral_score = max(0, 1 - centroid_diff / 2000)
+    spectral_score = max(0, 1 - centroid_diff / SPECTRAL_CENTROID_RANGE)
 
     return min(1.0, tempo_score * 0.35 + key_score * 0.30 + energy_score * 0.20 + spectral_score * 0.15)
 
@@ -99,7 +102,10 @@ def find_vocal_transition_points(
 ) -> float:
     """Find optimal intro_skip for vocal-to-vocal flow. Returns seconds to skip from track2 start."""
 
-    def snap(t: float, beats: Optional[np.ndarray], vocal_segments: Optional[List[Tuple[float, float]]] = None) -> float:
+    def snap(
+        t: float, beats: Optional[np.ndarray],
+        vocal_segments: Optional[List[Tuple[float, float]]] = None,
+    ) -> float:
         if beats is None or len(beats) == 0:
             return t
         idx = np.argmin(np.abs(beats - t))

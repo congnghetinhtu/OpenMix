@@ -98,15 +98,6 @@ run("/path/to/music")                    # defaults
 run("/path/to/music", "mix.wav", 48000)  # custom output + sample rate
 ```
 
-Legacy wrapper:
-
-```python
-from openmix import OpenMixer
-
-mixer = OpenMixer("/path/to/music", "mix.wav", 48000)
-mixer.create_mix()
-```
-
 ---
 
 ## 🧠 How It Works

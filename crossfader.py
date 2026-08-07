@@ -1,5 +1,5 @@
 """
-OpenMix crossfade creation: tempo sync, key correction, vocal-aware blending.
+OpenMix crossfade creation: tempo sync, vocal-aware blending.
 Stateful per-transition — creates a fresh instance per transition pair.
 """
 
@@ -19,6 +19,7 @@ from audio_utils import (
 from constants import (
     BLEND_SAMPLES,
     FILTER_MIN_HZ,
+    FILTER_ORDER,
     LOWPASS_START_HZ,
     SOFT_LIMIT_CEILING,
     TEMPO_MAX_STRETCH_INVISIBLE,
@@ -77,8 +78,12 @@ class Crossfader:
             logger.info(f"  Creating {mode} tempo transition: {track1_tempo:.1f} -> {track2_tempo:.1f} BPM")
 
             if tempo_diff < 10:
-                track1_end = self._apply_invisible_tempo_sync(track1_end, track1_tempo, track2_tempo, is_outro=True)
-                track2_start = self._apply_invisible_tempo_sync(track2_start, track2_tempo, track1_tempo, is_outro=False)
+                track1_end = self._apply_invisible_tempo_sync(
+                    track1_end, track1_tempo, track2_tempo, is_outro=True
+                )
+                track2_start = self._apply_invisible_tempo_sync(
+                    track2_start, track2_tempo, track1_tempo, is_outro=False
+                )
             else:
                 mid = (track1_tempo + track2_tempo) / 2
                 track1_end = self._apply_invisible_tempo_sync(track1_end, track1_tempo, mid, is_outro=True)
@@ -203,7 +208,7 @@ class Crossfader:
         result = audio.astype(np.float64).copy()
         seg_len = 8192
         hop = seg_len // 2
-        order = 2
+        order = FILTER_ORDER
 
         right_bound = n if one_sided else center + active_half
 
@@ -250,6 +255,7 @@ class Crossfader:
         fade_in: np.ndarray,
         debug_log: CrossfadeDebug,
     ) -> np.ndarray:
+        track2_orig = track2_start.copy()
         try:
             t1_mono = track1_end if track1_end.ndim == 1 else np.mean(track1_end, axis=1)
             t2_mono = track2_start if track2_start.ndim == 1 else np.mean(track2_start, axis=1)
@@ -280,9 +286,12 @@ class Crossfader:
                     duck_curve = np.clip(duck_curve, 0.5, 1.0)
 
                 # Apply symmetric ducking to both tracks (prevents muddy buildup)
-                apply_duck = lambda audio, curve: audio * curve[:, None] if audio.ndim > 1 else audio * curve
-                track1_ducked = apply_duck(track1_end, duck_curve)
-                track2_start = apply_duck(track2_start, duck_curve)
+                def _apply_duck(audio, curve):
+                    if audio.ndim > 1:
+                        return audio * curve[:, None]
+                    return audio * curve
+                track1_ducked = _apply_duck(track1_end, duck_curve)
+                track2_start = _apply_duck(track2_start, duck_curve)
 
                 debug_log.ducking_applied = True
                 debug_log.ducking_frames = int(np.sum(duck_mask))
@@ -297,6 +306,7 @@ class Crossfader:
             debug_log.ducking_frames = 0
             logger.debug(f"Vocal overlap detection failed: {e}, using standard crossfade")
             track1_ducked = track1_end
+            track2_start = track2_orig
 
         crossfaded = apply_fade(track1_ducked, fade_out) + apply_fade(track2_start, fade_in)
 

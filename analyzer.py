@@ -53,9 +53,15 @@ def analyze_track(file_path: Path, config: AudioConfig) -> Optional[TrackAnalysi
         energy = float(np.mean(rms))
         energy_variation = float(np.std(rms))
 
-        spectral_centroid = float(np.mean(librosa.feature.spectral_centroid(y=focus, sr=sr, n_fft=n_fft, hop_length=hop_length)))
-        spectral_rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=focus, sr=sr, n_fft=n_fft, hop_length=hop_length)))
-        spectral_bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=focus, sr=sr, n_fft=n_fft, hop_length=hop_length)))
+        spectral_centroid = float(np.mean(
+            librosa.feature.spectral_centroid(y=focus, sr=sr, n_fft=n_fft, hop_length=hop_length)
+        ))
+        spectral_rolloff = float(np.mean(
+            librosa.feature.spectral_rolloff(y=focus, sr=sr, n_fft=n_fft, hop_length=hop_length)
+        ))
+        spectral_bandwidth = float(np.mean(
+            librosa.feature.spectral_bandwidth(y=focus, sr=sr, n_fft=n_fft, hop_length=hop_length)
+        ))
         zcr = float(np.mean(librosa.feature.zero_crossing_rate(focus)))
 
         vocal_segments = detect_vocals_edges(mono, sr, config)
