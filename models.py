@@ -64,6 +64,9 @@ class TransitionLog:
     ducking_applied: bool
     ducking_frames: int
     mix_position_sec: float
+    phase_correlation: float = 0.0
+    zero_crossing_aligned: bool = False
+    phase_inverted: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +87,9 @@ class TransitionLog:
             'ducking_applied': self.ducking_applied,
             'ducking_frames': self.ducking_frames,
             'mix_position_sec': self.mix_position_sec,
+            'phase_correlation': self.phase_correlation,
+            'zero_crossing_aligned': self.zero_crossing_aligned,
+            'phase_inverted': self.phase_inverted,
         }
 
 
@@ -93,3 +99,6 @@ class CrossfadeDebug:
     ducking_applied: bool = False
     ducking_frames: int = 0
     crossfade_section: Optional[np.ndarray] = None
+    phase_correlation: float = 0.0
+    zero_crossing_aligned: bool = False
+    phase_inverted: bool = False

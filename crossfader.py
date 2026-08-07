@@ -12,7 +12,9 @@ from scipy import signal
 from scipy.ndimage import gaussian_filter1d
 
 from audio_utils import (
+    align_to_zero_crossings,
     apply_fade,
+    compute_phase_correlation,
     make_equal_power_crossfade,
     time_stretch,
 )
@@ -21,6 +23,8 @@ from constants import (
     FILTER_MIN_HZ,
     FILTER_ORDER,
     LOWPASS_START_HZ,
+    PHASE_CORRELATION_WINDOW,
+    PHASE_INVERT_THRESHOLD,
     SOFT_LIMIT_CEILING,
     TEMPO_MAX_STRETCH_INVISIBLE,
     TEMPO_MAX_STRETCH_LARGE,
@@ -77,17 +81,12 @@ class Crossfader:
             debug_log.tempo_sync_mode = mode
             logger.info(f"  Creating {mode} tempo transition: {track1_tempo:.1f} -> {track2_tempo:.1f} BPM")
 
-            if tempo_diff < 10:
-                track1_end = self._apply_invisible_tempo_sync(
-                    track1_end, track1_tempo, track2_tempo, is_outro=True
-                )
-                track2_start = self._apply_invisible_tempo_sync(
-                    track2_start, track2_tempo, track1_tempo, is_outro=False
-                )
-            else:
-                mid = (track1_tempo + track2_tempo) / 2
-                track1_end = self._apply_invisible_tempo_sync(track1_end, track1_tempo, mid, is_outro=True)
-                track2_start = self._apply_invisible_tempo_sync(track2_start, track2_tempo, mid, is_outro=False)
+            track1_end = self._apply_gradual_tempo_ramp(
+                track1_end, track1_tempo, track2_tempo, is_outro=True
+            )
+            track2_start = self._apply_gradual_tempo_ramp(
+                track2_start, track2_tempo, track1_tempo, is_outro=False
+            )
         else:
             debug_log.tempo_sync_mode = 'none'
             logger.info(f"  Tempo difference minimal ({tempo_diff:.1f} BPM), preserving natural flow")
@@ -99,6 +98,7 @@ class Crossfader:
             track1_end = track1_end[:actual_cf]
             track2_start = track2_start[:actual_cf]
             crossfade_samples = actual_cf
+            window_samples = actual_cf
 
         # Low-pass filter the OUTGOING track to mask the transition, starting 5s before
         filter_input = np.concatenate([lead.astype(track1_end.dtype), track1_end]) if len(lead) else track1_end
@@ -109,6 +109,39 @@ class Crossfader:
         else:
             lead_filtered = None
             track1_end = filtered
+
+        # Phase alignment: zero-crossing boundary + correlation check
+        t1_analysis = track1_end if track1_end.ndim == 1 else np.mean(track1_end, axis=1)
+        t2_analysis = track2_start if track2_start.ndim == 1 else np.mean(track2_start, axis=1)
+
+        # Compute phase correlation at boundary
+        corr = compute_phase_correlation(
+            t1_analysis[-PHASE_CORRELATION_WINDOW:],
+            t2_analysis[:PHASE_CORRELATION_WINDOW],
+        )
+        debug_log.phase_correlation = corr
+
+        # Align both tracks to zero crossings at the boundary
+        track1_end, track2_start, zc_shift = align_to_zero_crossings(track1_end, track2_start)
+        if zc_shift > 0:
+            debug_log.zero_crossing_aligned = True
+            logger.info(f"    Zero-crossing aligned: removed {zc_shift} samples at boundary")
+
+        # Invert if strongly out of phase
+        if corr < PHASE_INVERT_THRESHOLD:
+            track2_start = -track2_start
+            debug_log.phase_inverted = True
+            logger.info(f"    Phase inverted track2 (correlation: {corr:.3f})")
+        elif abs(corr) > 0.3:
+            logger.info(f"    Phase correlation at boundary: {corr:.3f}")
+
+        # Update crossfade length after zero-crossing alignment
+        actual_cf = min(len(track1_end), len(track2_start))
+        if actual_cf < crossfade_samples:
+            track1_end = track1_end[:actual_cf]
+            track2_start = track2_start[:actual_cf]
+            crossfade_samples = actual_cf
+            window_samples = actual_cf
 
         # Crossfade curves (match actual segment length)
         fade_out, fade_in = make_equal_power_crossfade(crossfade_samples)
@@ -150,9 +183,15 @@ class Crossfader:
 
     # -- internal helpers --
 
-    def _apply_invisible_tempo_sync(
+    def _apply_gradual_tempo_ramp(
         self, audio: np.ndarray, original_tempo: float, target_tempo: float, is_outro: bool
     ) -> np.ndarray:
+        """Apply gradual tempo ramp across segment for smooth beat alignment.
+
+        Splits audio into overlapping chunks and applies progressively different
+        stretch factors. Outgoing track ramps toward incoming tempo; incoming
+        track ramps from outgoing tempo back to natural. Beats meet at center.
+        """
         tempo_diff = abs(original_tempo - target_tempo)
         if tempo_diff < 0.5:
             return audio
@@ -161,29 +200,84 @@ class Crossfader:
             logger.info("    Skipping heavy tempo sync for long section")
             return audio
 
-        if tempo_diff < 4:
-            max_stretch = TEMPO_MAX_STRETCH_INVISIBLE
-        elif tempo_diff < 10:
-            max_stretch = TEMPO_MAX_STRETCH_SMALL
-        else:
-            max_stretch = TEMPO_MAX_STRETCH_LARGE
-        max_change = min(max_stretch, tempo_diff / original_tempo * 0.15)
+        # Target stretch factor: full correction to match tempos
         if is_outro:
-            factor = 1.0 + max_change * 0.5 if target_tempo > original_tempo else 1.0 - max_change * 0.5
+            target_factor = original_tempo / target_tempo
         else:
-            factor = 1.0 - max_change * 0.3 if original_tempo > target_tempo else 1.0 + max_change * 0.3
+            target_factor = target_tempo / original_tempo
 
-        if abs(factor - 1.0) <= 0.005:
+        target_factor = np.clip(target_factor, 0.75, 1.35)
+
+        if abs(target_factor - 1.0) < 0.01:
             return audio
 
-        try:
-            result = time_stretch(audio, rate=factor)
-            logger.info(f"    Applied invisible tempo sync: {factor:.4f}x stretch")
-            return result
+        # Short segment: single uniform stretch
+        if len(audio) < 4096:
+            try:
+                result = time_stretch(audio, rate=target_factor)
+                if len(result) != len(audio):
+                    result = signal.resample(result, len(audio))
+                logger.info(f"    Applied uniform tempo sync: {target_factor:.4f}x (short segment)")
+                return result
+            except Exception as e:
+                logger.warning(f"    Uniform tempo sync failed: {e}")
+                return audio
 
-        except Exception as e:
-            logger.warning(f"    Invisible tempo sync failed: {e}, using original")
-            return audio
+        # Gradual ramp via overlap-add chunking
+        n_chunks = 16
+        chunk_size = max(1024, len(audio) // n_chunks)
+        overlap = chunk_size // 2
+
+        if is_outro:
+            factors = np.linspace(1.0, target_factor, n_chunks)
+        else:
+            factors = np.linspace(target_factor, 1.0, n_chunks)
+
+        result = np.zeros_like(audio)
+        win_sum = np.zeros(len(audio))
+
+        for i in range(n_chunks):
+            start = i * (chunk_size - overlap)
+            end = min(start + chunk_size, len(audio))
+            if start >= len(audio):
+                break
+
+            chunk = audio[start:end]
+            size = end - start
+            factor = factors[i]
+
+            if abs(factor - 1.0) < 0.005:
+                w = np.hanning(size * 2)[:size]
+                if chunk.ndim > 1:
+                    w = w[:, None]
+                result[start:end] += chunk * w
+                win_sum[start:end] += w.squeeze()
+                continue
+
+            try:
+                stretched = time_stretch(chunk, rate=factor)
+                if len(stretched) != size:
+                    stretched = signal.resample(stretched, size)
+                w = np.hanning(size * 2)[:size]
+                if stretched.ndim > 1:
+                    w = w[:, None]
+                result[start:end] += stretched * w
+                win_sum[start:end] += w.squeeze()
+            except Exception as e:
+                logger.warning(f"    Tempo ramp chunk {i} failed: {e}")
+                w = np.hanning(size * 2)[:size]
+                if chunk.ndim > 1:
+                    w = w[:, None]
+                result[start:end] += chunk * w
+                win_sum[start:end] += w.squeeze()
+
+        win_sum = np.maximum(win_sum, 1e-10)
+        if result.ndim > 1:
+            win_sum = win_sum[:, None]
+        result /= win_sum
+
+        logger.info(f"    Applied gradual tempo ramp: {original_tempo:.1f} -> {target_tempo:.1f} BPM (factor: {target_factor:.3f})")
+        return result
 
     def _apply_transition_filter(
         self, audio: np.ndarray, crossfade_samples: int, center_offset: int = 0
@@ -307,6 +401,18 @@ class Crossfader:
             logger.debug(f"Vocal overlap detection failed: {e}, using standard crossfade")
             track1_ducked = track1_end
             track2_start = track2_orig
+
+        # Phase safety net: if still negatively correlated after ducking, scale down
+        # to reduce cancellation damage (zero-crossing alignment handles most cases)
+        post_duck_corr = compute_phase_correlation(
+            track1_ducked if track1_ducked.ndim == 1 else np.mean(track1_ducked, axis=1),
+            track2_start if track2_start.ndim == 1 else np.mean(track2_start, axis=1),
+        )
+        if post_duck_corr < -0.3:
+            attenuation = np.sqrt(1.0 - abs(post_duck_corr))
+            track1_ducked = track1_ducked * attenuation
+            track2_start = track2_start * attenuation
+            logger.info(f"    Phase safety: attenuated both tracks by {attenuation:.3f} (corr: {post_duck_corr:.3f})")
 
         crossfaded = apply_fade(track1_ducked, fade_out) + apply_fade(track2_start, fade_in)
 

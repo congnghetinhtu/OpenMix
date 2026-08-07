@@ -26,3 +26,8 @@ STRIDE_STRONG_BEATS = 4
 TEMPO_MAX_STRETCH_INVISIBLE = 0.02   # < 4 BPM diff
 TEMPO_MAX_STRETCH_SMALL = 0.05       # 4-10 BPM diff
 TEMPO_MAX_STRETCH_LARGE = 0.15       # > 10 BPM diff
+
+# Phase alignment
+PHASE_CORRELATION_WINDOW = 4096      # samples to analyze at boundary
+ZERO_CROSSING_SEARCH = 256           # max samples to shift for zero-crossing alignment
+PHASE_INVERT_THRESHOLD = -0.6        # correlation below this → invert one track

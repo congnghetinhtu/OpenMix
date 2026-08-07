@@ -7,7 +7,12 @@ import librosa
 import numpy as np
 from scipy import signal
 
-from constants import NORMALIZE_GAIN_MAX, NORMALIZE_GAIN_MIN, SOFT_LIMIT_CEILING
+from constants import (
+    NORMALIZE_GAIN_MAX,
+    NORMALIZE_GAIN_MIN,
+    SOFT_LIMIT_CEILING,
+    ZERO_CROSSING_SEARCH,
+)
 
 
 def normalize_audio(audio: np.ndarray, target_lufs: float = -20.0) -> np.ndarray:
@@ -98,3 +103,93 @@ def soft_limit(audio: np.ndarray, ceiling: float = SOFT_LIMIT_CEILING) -> np.nda
     if peak > ceiling:
         return audio * (ceiling / peak)
     return audio
+
+
+def compute_phase_correlation(t1_tail: np.ndarray, t2_head: np.ndarray) -> float:
+    """Compute Pearson correlation between tail of track1 and head of track2.
+
+    Both inputs are mixed down to mono if multichannel.
+    Returns float in [-1.0, 1.0]. 1.0 = perfectly correlated, -1.0 = inverted.
+    """
+    if t1_tail.ndim > 1:
+        t1_tail = np.mean(t1_tail, axis=1)
+    if t2_head.ndim > 1:
+        t2_head = np.mean(t2_head, axis=1)
+
+    n = min(len(t1_tail), len(t2_head))
+    if n < 64:
+        return 0.0
+
+    a = t1_tail[-n:].astype(np.float64)
+    b = t2_head[:n].astype(np.float64)
+
+    a_std = np.std(a)
+    b_std = np.std(b)
+    if a_std < 1e-10 or b_std < 1e-10:
+        return 0.0
+
+    a = (a - np.mean(a)) / a_std
+    b = (b - np.mean(b)) / b_std
+
+    return float(np.mean(a * b))
+
+
+def find_zero_crossing(audio: np.ndarray, center: int, search_range: int = ZERO_CROSSING_SEARCH) -> int:
+    """Find nearest zero crossing to `center` within ±search_range samples.
+
+    Returns sample index of the zero crossing closest to center.
+    If no zero crossing found, returns center unchanged.
+    """
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+
+    n = len(audio)
+    start = max(0, center - search_range)
+    end = min(n - 1, center + search_range)
+
+    best_idx = center
+    best_dist = search_range + 1
+
+    for i in range(start, end):
+        if audio[i] * audio[i + 1] <= 0:
+            # Zero crossing found — pick the sample with smaller absolute value
+            if abs(audio[i]) < abs(audio[i + 1]):
+                idx = i
+            else:
+                idx = i + 1
+            dist = abs(idx - center)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+
+    return best_idx
+
+
+def align_to_zero_crossings(
+    t1_end: np.ndarray, t2_start: np.ndarray
+) -> tuple:
+    """Align crossfade boundary to zero crossings on both tracks.
+
+    Finds the nearest zero crossing near the end of t1_end and the start
+    of t2_start, then trims both to land exactly on those crossings.
+    Returns (aligned_t1_end, aligned_t2_start, samples_removed).
+    """
+    if t1_end.ndim > 1:
+        t1_mono = np.mean(t1_end, axis=1)
+        t2_mono = np.mean(t2_start, axis=1)
+    else:
+        t1_mono = t1_end
+        t2_mono = t2_start
+
+    # Find zero crossing near end of track1
+    t1_zc = find_zero_crossing(t1_mono, len(t1_mono) - 1)
+    # Find zero crossing near start of track2
+    t2_zc = find_zero_crossing(t2_mono, 0)
+
+    # Trim: keep t1 up to and including its zero crossing
+    # Trim: start t2 from its zero crossing
+    new_t1 = t1_end[:t1_zc + 1] if t1_zc < len(t1_end) - 1 else t1_end
+    new_t2 = t2_start[t2_zc:] if t2_zc > 0 else t2_start
+
+    samples_removed = (len(t1_end) - len(new_t1)) + (len(t2_start) - len(new_t2))
+    return new_t1, new_t2, samples_removed

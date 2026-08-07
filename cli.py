@@ -181,6 +181,9 @@ def run(
             ducking_applied=debug.ducking_applied,
             ducking_frames=debug.ducking_frames,
             mix_position_sec=round(mix_position, 1),
+            phase_correlation=round(debug.phase_correlation, 4),
+            zero_crossing_aligned=debug.zero_crossing_aligned,
+            phase_inverted=debug.phase_inverted,
         ))
 
     # Final normalization — RMS-based gain for consistent loudness

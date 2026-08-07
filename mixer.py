@@ -270,6 +270,7 @@ def write_transition_log(logs: List[TransitionLog], output_path: Path):
         'compatibility_score', 'crossfade_sec',
         'vocal_segments_outgoing', 'vocal_segments_incoming',
         'ducking_applied', 'ducking_frames', 'mix_position_sec',
+        'phase_correlation', 'zero_crossing_aligned', 'phase_inverted',
     ]
     with open(log_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
